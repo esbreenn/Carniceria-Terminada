@@ -23,23 +23,19 @@ export function useMe() {
           return;
         }
 
-        // 🔐 Obtener token de Firebase
-        const token = await u.getIdToken();
+        const idToken = await u.getIdToken();
 
-        // 📡 Llamada al backend con Authorization
         const res = await fetch("/api/users/ensure", {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idToken }),
         });
 
         if (!res.ok) throw new Error("No se pudo asegurar el usuario");
 
         const data = (await res.json()) as Me;
         setMe(data);
-      } catch (e) {
-        console.error("useMe error:", e);
+      } catch {
         setMe(null);
       } finally {
         setLoading(false);
