@@ -32,11 +32,12 @@ export default function LoginClient() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`,
         },
+        body: JSON.stringify({ idToken }),
       });
 
       if (!r1.ok) {
-        const data = await r1.json().catch(() => ({}));
-        throw new Error(data?.error || "No se pudo crear sesión");
+        const text = await r1.text().catch(() => "");
+        throw new Error(text || "No se pudo crear sesión");
       }
 
       // 2) Crear users/{uid} y shops/{shopId}
@@ -46,11 +47,12 @@ export default function LoginClient() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`,
         },
+        body: JSON.stringify({ idToken }),
       });
 
       if (!r2.ok) {
-        const data = await r2.json().catch(() => ({}));
-        throw new Error(data?.error || "No se pudo crear usuario en Firestore");
+        const text = await r2.text().catch(() => "");
+        throw new Error(text || "No se pudo crear usuario en Firestore");
       }
 
       router.push(next);
