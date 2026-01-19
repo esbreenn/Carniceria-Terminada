@@ -12,6 +12,7 @@ export default function LoginClient() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,15 +25,33 @@ export default function LoginClient() {
       const cred = await signInWithEmailAndPassword(firebaseAuth, email, password);
       const idToken = await cred.user.getIdToken();
 
+      // 1) Crear sesión (cookie)
       const r1 = await fetch("/api/auth/session", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idToken }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
       });
-      if (!r1.ok) throw new Error("No se pudo crear sesión");
 
-      const r2 = await fetch("/api/users/ensure", { method: "POST" });
-      if (!r2.ok) throw new Error("No se pudo crear usuario");
+      if (!r1.ok) {
+        const data = await r1.json().catch(() => ({}));
+        throw new Error(data?.error || "No se pudo crear sesión");
+      }
+
+      // 2) Crear users/{uid} y shops/{shopId}
+      const r2 = await fetch("/api/users/ensure", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+
+      if (!r2.ok) {
+        const data = await r2.json().catch(() => ({}));
+        throw new Error(data?.error || "No se pudo crear usuario en Firestore");
+      }
 
       router.push(next);
       router.refresh();
