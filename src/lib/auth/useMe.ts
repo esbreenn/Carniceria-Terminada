@@ -27,8 +27,10 @@ export function useMe() {
 
         const res = await fetch("/api/users/ensure", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ idToken }),
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
         });
 
         if (!res.ok) throw new Error("No se pudo asegurar el usuario");
