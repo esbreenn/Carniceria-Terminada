@@ -1,4 +1,5 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -10,31 +11,43 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    function hasUserDoc() {
-      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function shopId() {
+    function myShopId() {
       return userDoc().data.shopId;
     }
 
-    function isOwner() {
-      return hasUserDoc() && userDoc().data.role == "owner";
+    function myRole() {
+      return userDoc().data.role;
     }
 
+    function isOwner() {
+      return myRole() == "owner";
+    }
+
+    // Solo el propio usuario puede leer su doc (y solo backend debería escribirlo)
     match /users/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow write: if false;
     }
 
-    match /shops/{shop} {
-      allow read: if hasUserDoc() && shop == shopId();
-      allow write: if false;
+    // Shops root (opcional: owner-only)
+    match /shops/{shopId} {
+      allow read: if signedIn() && myShopId() == shopId;
+      allow write: if signedIn() && myShopId() == shopId && isOwner();
     }
 
-    match /shops/{shop}/{col=**}/{docId} {
-      allow read: if hasUserDoc() && shop == shopId();
-      allow create, update, delete: if hasUserDoc() && shop == shopId() && isOwner();
+    // Todo lo que cuelga del shop
+    match /shops/{shopId}/{document=**} {
+      allow read: if signedIn() && myShopId() == shopId;
+
+      // empleados pueden operar módulos normales
+      allow write: if signedIn() && myShopId() == shopId;
+      // si querés restringir settings a owner, lo hacemos por rutas más específicas
+    }
+
+    // Settings: owner-only (si lo usás)
+    match /shops/{shopId}/settings/{docId} {
+      allow read: if signedIn() && myShopId() == shopId;
+      allow write: if signedIn() && myShopId() == shopId && isOwner();
     }
   }
 }

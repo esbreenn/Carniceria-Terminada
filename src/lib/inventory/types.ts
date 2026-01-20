@@ -4,26 +4,22 @@ export type Product = {
   id: string;
   name: string;
   unit: ProductUnit;
-  salePriceCents: number; // ENTERO SIEMPRE
-  stockQty: number; // puede ser decimal si unit=kg
+  salePriceCents: number; // SIEMPRE centavos
+  stockQty: number; // si unit=kg -> kilos (puede ser decimal), si unit=unit -> unidades
   lowStockAlertQty: number;
-  createdAt?: number;
-  updatedAt?: number;
+  createdAt: number;
+  updatedAt: number;
 };
 
-// "6500.00" -> 650000
-export function priceToCents(price: string): number {
-  const normalized = price.replace(",", ".").trim();
-  if (!normalized) return 0;
-
-  const num = Number(normalized);
-  if (!Number.isFinite(num)) throw new Error("Precio inválido");
-
-  return Math.round(num * 100);
+// helpers UI
+export function centsToPrice(cents: number) {
+  return (cents / 100).toFixed(2);
 }
 
-// 650000 -> "6500.00"
-export function centsToPrice(cents: number): string {
-  const n = Number(cents || 0);
-  return (n / 100).toFixed(2);
+export function priceToCents(price: string) {
+  // "1234.56" -> 123456
+  const normalized = price.replace(",", ".").trim();
+  const n = Number(normalized);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100);
 }
