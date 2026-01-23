@@ -54,35 +54,92 @@ export default function DashboardPage() {
     })();
   }, [me?.shopId]);
 
-  if (loading) return <div className="p-6 text-zinc-200">Cargando…</div>;
-  if (!me) return <div className="p-6 text-zinc-200">No autenticado.</div>;
+  if (loading) return <div className="min-h-screen bg-zinc-950 p-6 text-zinc-200">Cargando…</div>;
+  if (!me) return <div className="min-h-screen bg-zinc-950 p-6 text-zinc-200">No autenticado.</div>;
 
   return (
-    <div className="p-6 text-zinc-100">
-      <h1 className="text-xl font-semibold">Dashboard</h1>
-      <p className="mt-1 text-sm text-zinc-400">
-        Este dashboard lee SOLO resúmenes (no 5000 documentos). Rápido y barato.
-      </p>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="mx-auto w-full max-w-6xl px-6 py-8">
+        <div className="flex flex-col gap-6 rounded-3xl border border-white/5 bg-gradient-to-br from-zinc-900/80 via-zinc-950/80 to-black/80 p-6 shadow-2xl shadow-black/40">
+          <div className="flex flex-col gap-2">
+            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+              Carnicería premium
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Dashboard</h1>
+            <p className="text-sm text-zinc-400 md:text-base">
+              Este dashboard lee SOLO resúmenes (no 5000 documentos). Rápido y barato.
+            </p>
+          </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
-        <div className="rounded-2xl bg-zinc-900/40 p-4 ring-1 ring-zinc-800">
-          <h2 className="font-semibold">Hoy</h2>
-          <p className="mt-2 text-sm text-zinc-400">
-            Ventas: {centsToARS(today?.salesTotalCents ?? 0)} ({today?.salesCount ?? 0})
-          </p>
-          <p className="mt-1 text-sm text-zinc-400">
-            Caja neta: {centsToARS(today?.cashNetCents ?? 0)}
-          </p>
-        </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-white/5 bg-gradient-to-br from-zinc-900/70 to-zinc-950/70 p-5 shadow-lg shadow-black/30">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-zinc-100">Hoy</h2>
+                <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-xs font-medium text-emerald-200">
+                  En vivo
+                </span>
+              </div>
+              <div className="mt-4 space-y-3 text-sm text-zinc-400">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-300">Ventas</span>
+                  <span className="text-base font-semibold text-zinc-100">
+                    {centsToARS(today?.salesTotalCents ?? 0)}
+                    <span className="ml-2 text-xs font-medium text-zinc-400">
+                      ({today?.salesCount ?? 0})
+                    </span>
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-300">Caja neta</span>
+                  <span className="text-base font-semibold text-zinc-100">
+                    {centsToARS(today?.cashNetCents ?? 0)}
+                  </span>
+                </div>
+              </div>
+            </div>
 
-        <div className="rounded-2xl bg-zinc-900/40 p-4 ring-1 ring-zinc-800">
-          <h2 className="font-semibold">Este mes</h2>
-          <p className="mt-2 text-sm text-zinc-400">
-            Ventas: {centsToARS(month?.salesTotalCents ?? 0)} ({month?.salesCount ?? 0})
-          </p>
-          <p className="mt-1 text-sm text-zinc-400">
-            Caja neta: {centsToARS(month?.cashNetCents ?? 0)}
-          </p>
+            <div className="rounded-2xl border border-white/5 bg-gradient-to-br from-zinc-900/70 to-zinc-950/70 p-5 shadow-lg shadow-black/30">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-zinc-100">Este mes</h2>
+                <span className="rounded-full border border-indigo-400/20 bg-indigo-400/10 px-2 py-1 text-xs font-medium text-indigo-200">
+                  Resumen
+                </span>
+              </div>
+              <div className="mt-4 space-y-3 text-sm text-zinc-400">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-300">Ventas</span>
+                  <span className="text-base font-semibold text-zinc-100">
+                    {centsToARS(month?.salesTotalCents ?? 0)}
+                    <span className="ml-2 text-xs font-medium text-zinc-400">
+                      ({month?.salesCount ?? 0})
+                    </span>
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-300">Caja neta</span>
+                  <span className="text-base font-semibold text-zinc-100">
+                    {centsToARS(month?.cashNetCents ?? 0)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-2xl border border-white/5 bg-zinc-900/40 px-5 py-4 text-xs text-zinc-400">
+            <span className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300">
+              Indicador operativo
+            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-zinc-950/60 px-3 py-1">
+                <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                Resúmenes sincronizados
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-zinc-950/60 px-3 py-1">
+                <span className="h-2 w-2 rounded-full bg-amber-400" />
+                Reporte diario activo
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
