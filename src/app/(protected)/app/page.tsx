@@ -67,7 +67,7 @@ export default function DashboardPage() {
             </div>
             <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Dashboard</h1>
             <p className="text-sm text-zinc-400 md:text-base">
-              Este dashboard lee SOLO resúmenes (no 5000 documentos). Rápido y barato.
+              Son resumenes automáticos de ventas y caja generados por el sistema.
             </p>
           </div>
 
