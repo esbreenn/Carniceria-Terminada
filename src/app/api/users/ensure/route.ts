@@ -57,6 +57,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       uid: user.uid,
       email: user.email ?? null,
+      displayName: user.displayName ?? null,
       shopId: user.shopId,
       role: user.role,
     });
