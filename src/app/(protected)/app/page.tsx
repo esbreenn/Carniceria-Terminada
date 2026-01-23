@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { firebaseDb } from "@/lib/firebase/client";
 import { useMe } from "@/lib/auth/useMe";
+import DashboardHome from "@/app/components/DashboardHome";
 
 function formatDayKeyAR(d: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -28,20 +29,16 @@ function formatMonthKeyAR(d: Date) {
   return `${get("year")}-${get("month")}`;
 }
 
-function centsToARS(cents: number) {
-  return (cents / 100).toLocaleString("es-AR", { style: "currency", currency: "ARS" });
-}
-
 export default function DashboardPage() {
   const { me, loading } = useMe();
   const [today, setToday] = useState<any>(null);
   const [month, setMonth] = useState<any>(null);
+  const now = new Date();
 
   useEffect(() => {
     (async () => {
       if (!me?.shopId) return;
 
-      const now = new Date();
       const dayKey = formatDayKeyAR(now);
       const monthKey = formatMonthKeyAR(now);
 
@@ -57,34 +54,23 @@ export default function DashboardPage() {
   if (loading) return <div className="p-6 text-zinc-200">Cargando…</div>;
   if (!me) return <div className="p-6 text-zinc-200">No autenticado.</div>;
 
+  const todaySalesCents = today?.salesTotalCents ?? 0;
+  const todaySalesCount = today?.salesCount ?? 0;
+  const todayCashNetCents = today?.cashNetCents ?? 0;
+  const monthSalesCents = month?.salesTotalCents ?? 0;
+  const monthSalesCount = month?.salesCount ?? 0;
+  const monthCashNetCents = month?.cashNetCents ?? 0;
+
   return (
-    <div className="p-6 text-zinc-100">
-      <h1 className="text-xl font-semibold">Dashboard</h1>
-      <p className="mt-1 text-sm text-zinc-400">
-        Este dashboard lee SOLO resúmenes (no 5000 documentos). Rápido y barato.
-      </p>
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
-        <div className="rounded-2xl bg-zinc-900/40 p-4 ring-1 ring-zinc-800">
-          <h2 className="font-semibold">Hoy</h2>
-          <p className="mt-2 text-sm text-zinc-400">
-            Ventas: {centsToARS(today?.salesTotalCents ?? 0)} ({today?.salesCount ?? 0})
-          </p>
-          <p className="mt-1 text-sm text-zinc-400">
-            Caja neta: {centsToARS(today?.cashNetCents ?? 0)}
-          </p>
-        </div>
-
-        <div className="rounded-2xl bg-zinc-900/40 p-4 ring-1 ring-zinc-800">
-          <h2 className="font-semibold">Este mes</h2>
-          <p className="mt-2 text-sm text-zinc-400">
-            Ventas: {centsToARS(month?.salesTotalCents ?? 0)} ({month?.salesCount ?? 0})
-          </p>
-          <p className="mt-1 text-sm text-zinc-400">
-            Caja neta: {centsToARS(month?.cashNetCents ?? 0)}
-          </p>
-        </div>
-      </div>
-    </div>
+    <DashboardHome
+      displayName={me?.displayName || "equipo"}
+      now={now}
+      todaySalesCents={todaySalesCents}
+      todaySalesCount={todaySalesCount}
+      todayCashNetCents={todayCashNetCents}
+      monthSalesCents={monthSalesCents}
+      monthSalesCount={monthSalesCount}
+      monthCashNetCents={monthCashNetCents}
+    />
   );
 }
