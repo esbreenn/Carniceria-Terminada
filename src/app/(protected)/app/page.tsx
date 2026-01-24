@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { doc, getDoc } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { firebaseDb } from "@/lib/firebase/client";
 import { useMe } from "@/lib/auth/useMe";
+import DashboardChart from "@/app/components/DashboardChart";
 
 function formatDayKeyAR(d: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -32,10 +33,48 @@ function centsToARS(cents: number) {
   return (cents / 100).toLocaleString("es-AR", { style: "currency", currency: "ARS" });
 }
 
+type DashboardSeries = {
+  labels: string[]; // ["01","02",...]
+  dailySalesCents: number[];
+  dailyNetCents?: number[]; // opcional
+  updatedAt?: number;
+};
+
+function daysInMonthAR(now = new Date()) {
+  const y = Number(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Argentina/Buenos_Aires",
+      year: "numeric",
+    }).format(now)
+  );
+  const m = Number(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Argentina/Buenos_Aires",
+      month: "2-digit",
+    }).format(now)
+  );
+  return new Date(y, m, 0).getDate();
+}
+
+function buildEmptySeries(now = new Date()): DashboardSeries {
+  const dim = daysInMonthAR(now);
+  const labels = Array.from({ length: dim }, (_, i) => String(i + 1).padStart(2, "0"));
+  return {
+    labels,
+    dailySalesCents: Array(dim).fill(0),
+    dailyNetCents: Array(dim).fill(0),
+    updatedAt: Date.now(),
+  };
+}
+
 export default function DashboardPage() {
   const { me, loading } = useMe();
+
   const [today, setToday] = useState<any>(null);
   const [month, setMonth] = useState<any>(null);
+  const [series, setSeries] = useState<DashboardSeries | null>(null);
+
+  const monthKey = useMemo(() => formatMonthKeyAR(new Date()), []);
 
   useEffect(() => {
     (async () => {
@@ -43,16 +82,31 @@ export default function DashboardPage() {
 
       const now = new Date();
       const dayKey = formatDayKeyAR(now);
-      const monthKey = formatMonthKeyAR(now);
 
       const dayRef = doc(firebaseDb, `shops/${me.shopId}/daily_summaries/${dayKey}`);
       const monthRef = doc(firebaseDb, `shops/${me.shopId}/monthly_summaries/${monthKey}`);
+      const seriesRef = doc(firebaseDb, `shops/${me.shopId}/dashboard_series/${monthKey}`);
 
-      const [ds, ms] = await Promise.all([getDoc(dayRef), getDoc(monthRef)]);
+      const [ds, ms, ss] = await Promise.all([getDoc(dayRef), getDoc(monthRef), getDoc(seriesRef)]);
+
       setToday(ds.exists() ? ds.data() : null);
       setMonth(ms.exists() ? ms.data() : null);
+
+      if (ss.exists()) {
+        setSeries(ss.data() as DashboardSeries);
+      } else {
+        const empty = buildEmptySeries(now);
+        await setDoc(seriesRef, empty, { merge: true });
+        setSeries(empty);
+      }
     })();
-  }, [me?.shopId]);
+  }, [me?.shopId, monthKey]);
+
+  const chartLabels = useMemo(() => (series?.labels && Array.isArray(series.labels) ? series.labels : []), [series]);
+  const chartSales = useMemo(
+    () => (series?.dailySalesCents && Array.isArray(series.dailySalesCents) ? series.dailySalesCents.map((n) => Number(n || 0)) : []),
+    [series]
+  );
 
   if (loading) return <div className="min-h-screen bg-zinc-950 p-6 text-zinc-200">Cargando…</div>;
   if (!me) return <div className="min-h-screen bg-zinc-950 p-6 text-zinc-200">No autenticado.</div>;
@@ -62,13 +116,12 @@ export default function DashboardPage() {
       <div className="mx-auto w-full max-w-6xl px-6 py-8">
         <div className="relative flex flex-col gap-6 overflow-hidden rounded-3xl border border-white/5 bg-gradient-to-br from-zinc-900/80 via-zinc-950/80 to-black/90 p-6 shadow-2xl shadow-black/40">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,180,80,0.14),_transparent_55%)]" />
+
           <div className="relative z-10 flex flex-col gap-3">
             <div className="inline-flex w-fit items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.3em] text-amber-200">
               Carnicería premium
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-50 md:text-4xl">
-              Dashboard
-            </h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-50 md:text-4xl">Dashboard</h1>
             <p className="max-w-2xl text-sm leading-snug text-zinc-400 md:text-base">
               Resumen del rendimiento de tu carnicería hoy y este mes.
             </p>
@@ -82,6 +135,7 @@ export default function DashboardPage() {
                   En vivo
                 </span>
               </div>
+
               <div className="mt-5 grid gap-4 md:grid-cols-2">
                 <div>
                   <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Ventas</p>
@@ -90,6 +144,7 @@ export default function DashboardPage() {
                   </p>
                   <p className="mt-1 text-xs text-zinc-400">Operaciones: {today?.salesCount ?? 0}</p>
                 </div>
+
                 <div>
                   <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Caja neta</p>
                   <p className="mt-2 text-2xl font-semibold tracking-tight text-zinc-50 md:text-3xl">
@@ -98,19 +153,14 @@ export default function DashboardPage() {
                   <p className="mt-1 text-xs text-zinc-400">Estimado diario</p>
                 </div>
               </div>
-              <div className="mt-6 rounded-2xl border border-white/5 bg-black/30 p-4">
-                <div className="flex items-center justify-between text-xs text-zinc-400">
-                  <span className="uppercase tracking-[0.2em]">Flujo</span>
-                  <span className="text-zinc-500">Últimas horas</span>
-                </div>
-                <div className="mt-4 flex h-24 items-end gap-2">
-                  <div className="h-10 w-full rounded-lg bg-gradient-to-t from-amber-500/30 to-amber-400/70" />
-                  <div className="h-14 w-full rounded-lg bg-gradient-to-t from-amber-500/30 to-amber-400/70" />
-                  <div className="h-8 w-full rounded-lg bg-gradient-to-t from-amber-500/30 to-amber-400/70" />
-                  <div className="h-16 w-full rounded-lg bg-gradient-to-t from-amber-500/30 to-amber-400/70" />
-                  <div className="h-20 w-full rounded-lg bg-gradient-to-t from-amber-500/30 to-amber-400/70" />
-                  <div className="h-12 w-full rounded-lg bg-gradient-to-t from-amber-500/30 to-amber-400/70" />
-                </div>
+
+              {/* ✅ GRÁFICO REAL */}
+              <div className="mt-6">
+                <DashboardChart
+                  title={`Ventas diarias (${monthKey})`}
+                  labels={chartLabels}
+                  valuesCents={chartSales}
+                />
               </div>
             </div>
 
@@ -122,29 +172,25 @@ export default function DashboardPage() {
                     Resumen
                   </span>
                 </div>
+
                 <div className="mt-4 space-y-4 text-sm text-zinc-400">
                   <div className="flex items-center justify-between">
                     <span className="text-zinc-300">Ventas</span>
                     <span className="text-base font-semibold text-zinc-100">
                       {centsToARS(month?.salesTotalCents ?? 0)}
-                      <span className="ml-2 text-xs font-medium text-zinc-400">
-                        ({month?.salesCount ?? 0})
-                      </span>
+                      <span className="ml-2 text-xs font-medium text-zinc-400">({month?.salesCount ?? 0})</span>
                     </span>
                   </div>
+
                   <div className="flex items-center justify-between">
                     <span className="text-zinc-300">Caja neta</span>
-                    <span className="text-base font-semibold text-zinc-100">
-                      {centsToARS(month?.cashNetCents ?? 0)}
-                    </span>
+                    <span className="text-base font-semibold text-zinc-100">{centsToARS(month?.cashNetCents ?? 0)}</span>
                   </div>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-white/5 bg-zinc-900/40 px-5 py-4 text-xs text-zinc-400">
-                <span className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300">
-                  Indicador operativo
-                </span>
+                <span className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300">Indicador operativo</span>
                 <div className="mt-3 flex flex-col gap-2">
                   <span className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-zinc-950/60 px-3 py-1">
                     <span className="h-2 w-2 rounded-full bg-emerald-400" />
@@ -152,12 +198,13 @@ export default function DashboardPage() {
                   </span>
                   <span className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-zinc-950/60 px-3 py-1">
                     <span className="h-2 w-2 rounded-full bg-amber-400" />
-                    Reporte diario activo
+                    Serie mensual lista para gráfico
                   </span>
                 </div>
               </div>
             </div>
           </div>
+
         </div>
       </div>
     </div>
