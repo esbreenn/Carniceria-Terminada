@@ -31,3 +31,34 @@ export type CashMovement = {
   createdAt: number;     // Date.now()
   createdBy: string;     // uid del usuario
 };
+
+export type CashShiftStatus = "open" | "closed";
+
+export type CreateCashShiftInput = {
+  cashierName: string;
+  openingCashCents: number;
+  openedAt?: number;
+  note?: string;
+};
+
+export type CloseCashShiftInput = {
+  closingCashCents: number;
+  closedAt?: number;
+  note?: string;
+  differenceCents: number;
+};
+
+export type CashShift = {
+  id: string;
+  cashierName: string;
+  status: CashShiftStatus;
+  openingCashCents: number;
+  closingCashCents?: number;
+  differenceCents?: number;
+  openedAt: number;
+  closedAt?: number;
+  note?: string;
+  createdAt: number;
+  createdBy: string;
+  closedBy?: string;
+};

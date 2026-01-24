@@ -8,10 +8,18 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  updateDoc,
+  doc,
 } from "firebase/firestore";
 
 import { firebaseAuth, firebaseDb } from "@/lib/firebase/client";
-import type { CashMovement, CreateCashInput } from "@/lib/cash/types";
+import type {
+  CashMovement,
+  CreateCashInput,
+  CreateCashShiftInput,
+  CloseCashShiftInput,
+  CashShift,
+} from "@/lib/cash/types";
 
 const MAX_AMOUNT_CENTS = 100_000_000;
 
@@ -92,4 +100,105 @@ export async function listCashMovements(shopId: string, take = 50) {
     const bKey = b.occurredAt ?? b.createdAt ?? 0;
     return bKey - aKey;
   });
+}
+
+// Crea un turno de caja en: shops/{shopId}/cashShifts
+export async function createCashShift(
+  shopId: string,
+  input: CreateCashShiftInput
+) {
+  const u = requireAuth();
+
+  if (!shopId) throw new Error("shopId requerido");
+  const cashierName = input.cashierName.trim();
+  if (!cashierName) throw new Error("Nombre del cajero requerido");
+  if (!Number.isInteger(input.openingCashCents) || input.openingCashCents < 0) {
+    throw new Error("Caja inicial inválida");
+  }
+  if (input.openingCashCents > MAX_AMOUNT_CENTS) {
+    throw new Error("Caja inicial excede el máximo permitido");
+  }
+
+  const ref = collection(firebaseDb, "shops", shopId, "cashShifts");
+  const openedAt = input.openedAt ?? Date.now();
+
+  await addDoc(ref, {
+    cashierName,
+    status: "open",
+    openingCashCents: input.openingCashCents,
+    openedAt,
+    note: input.note?.trim() || null,
+    createdAt: Date.now(),
+    createdBy: u.uid,
+    createdAtServer: serverTimestamp(),
+  });
+}
+
+// Cierra un turno de caja: shops/{shopId}/cashShifts/{shiftId}
+export async function closeCashShift(
+  shopId: string,
+  shiftId: string,
+  input: CloseCashShiftInput
+) {
+  const u = requireAuth();
+
+  if (!shopId) throw new Error("shopId requerido");
+  if (!shiftId) throw new Error("turno requerido");
+  if (!Number.isInteger(input.closingCashCents) || input.closingCashCents < 0) {
+    throw new Error("Caja final inválida");
+  }
+  if (!Number.isInteger(input.differenceCents)) {
+    throw new Error("Diferencia inválida");
+  }
+  if (input.closingCashCents > MAX_AMOUNT_CENTS) {
+    throw new Error("Caja final excede el máximo permitido");
+  }
+
+  const ref = doc(firebaseDb, "shops", shopId, "cashShifts", shiftId);
+  const closedAt = input.closedAt ?? Date.now();
+
+  await updateDoc(ref, {
+    status: "closed",
+    closingCashCents: input.closingCashCents,
+    differenceCents: input.differenceCents,
+    closedAt,
+    note: input.note?.trim() || null,
+    closedBy: u.uid,
+    updatedAt: Date.now(),
+    updatedAtServer: serverTimestamp(),
+  });
+}
+
+// Lista turnos recientes desde: shops/{shopId}/cashShifts
+export async function listCashShifts(shopId: string, take = 20) {
+  const u = requireAuth();
+  void u;
+
+  if (!shopId) throw new Error("shopId requerido");
+
+  const ref = collection(firebaseDb, "shops", shopId, "cashShifts");
+  const q = query(ref, orderBy("openedAt", "desc"), limit(take));
+
+  const snap = await getDocs(q);
+
+  const rows: CashShift[] = snap.docs.map((d) => {
+    const data = d.data() as any;
+
+    return {
+      id: d.id,
+      cashierName: data.cashierName,
+      status: data.status,
+      openingCashCents: data.openingCashCents,
+      closingCashCents: data.closingCashCents ?? undefined,
+      differenceCents: data.differenceCents ?? undefined,
+      openedAt: data.openedAt,
+      closedAt: data.closedAt ?? undefined,
+      note: data.note ?? undefined,
+      createdAt: data.createdAt,
+      createdBy: data.createdBy,
+      closedBy: data.closedBy ?? undefined,
+    };
+  });
+
+  return rows.sort((a, b) => (b.openedAt ?? 0) - (a.openedAt ?? 0));
 }

@@ -2,8 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMe } from "@/lib/auth/useMe";
-import { createCashMovement, listCashMovements } from "@/lib/cash/client";
-import type { PaymentMethod, CashDirection, CashMovement } from "@/lib/cash/types";
+import {
+  createCashMovement,
+  listCashMovements,
+  createCashShift,
+  closeCashShift,
+  listCashShifts,
+} from "@/lib/cash/client";
+import type {
+  PaymentMethod,
+  CashDirection,
+  CashMovement,
+  CashShift,
+} from "@/lib/cash/types";
 
 const MAX_AMOUNT_ARS = 1_000_000;
 const METHOD_LABELS: Record<PaymentMethod, string> = {
@@ -59,8 +70,22 @@ export default function CashPage() {
   );
 
   const [items, setItems] = useState<CashMovement[]>([]);
+  const [shifts, setShifts] = useState<CashShift[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [shiftBusy, setShiftBusy] = useState(false);
+  const [shiftMsg, setShiftMsg] = useState<string | null>(null);
+
+  const [shiftCashier, setShiftCashier] = useState("");
+  const [shiftOpeningCash, setShiftOpeningCash] = useState("0");
+  const [shiftOpenedAt, setShiftOpenedAt] = useState(() =>
+    toInputDateTime(new Date())
+  );
+  const [shiftClosingCash, setShiftClosingCash] = useState("");
+  const [shiftClosedAt, setShiftClosedAt] = useState(() =>
+    toInputDateTime(new Date())
+  );
+  const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
 
   const totalAmountCents = splitMethods.reduce((acc, entry) => {
     return acc + Math.round(Number(entry.amountARS || 0) * 100);
@@ -106,6 +131,16 @@ export default function CashPage() {
       setItems(rows);
     } catch (error: any) {
       setMsg(`❌ ${error?.message || "Error al cargar movimientos"}`);
+    }
+  }, [me]);
+
+  const loadShifts = useCallback(async () => {
+    if (!me) return;
+    try {
+      const rows = await listCashShifts(me.shopId, 20);
+      setShifts(rows);
+    } catch (error: any) {
+      setShiftMsg(`❌ ${error?.message || "Error al cargar turnos"}`);
     }
   }, [me]);
 
@@ -170,9 +205,93 @@ export default function CashPage() {
     }
   }
 
+  async function openShift() {
+    if (shiftBusy) return;
+    setShiftMsg(null);
+    if (!me) return setShiftMsg("No autenticado");
+    const openingCashCents = Math.round(Number(shiftOpeningCash || 0) * 100);
+    if (!shiftCashier.trim()) return setShiftMsg("Nombre del cajero requerido");
+    if (!Number.isInteger(openingCashCents) || openingCashCents < 0) {
+      return setShiftMsg("Caja inicial inválida");
+    }
+
+    setShiftBusy(true);
+    try {
+      const openedAtValue = shiftOpenedAt
+        ? new Date(shiftOpenedAt).getTime()
+        : Date.now();
+      if (shiftOpenedAt && Number.isNaN(openedAtValue)) {
+        return setShiftMsg("Fecha de apertura inválida");
+      }
+
+      await createCashShift(me.shopId, {
+        cashierName: shiftCashier,
+        openingCashCents,
+        openedAt: openedAtValue,
+      });
+
+      setShiftMsg("✅ Turno abierto");
+      setShiftCashier("");
+      setShiftOpeningCash("0");
+      setShiftOpenedAt(toInputDateTime(new Date()));
+      await loadShifts();
+    } catch (error: any) {
+      setShiftMsg(`❌ ${error?.message || "Error al abrir turno"}`);
+    } finally {
+      setShiftBusy(false);
+    }
+  }
+
+  async function closeShift() {
+    if (shiftBusy) return;
+    setShiftMsg(null);
+    if (!me) return setShiftMsg("No autenticado");
+    if (!selectedShiftId) return setShiftMsg("Seleccioná un turno abierto");
+
+    const shift = shifts.find((row) => row.id === selectedShiftId);
+    if (!shift) return setShiftMsg("Turno no encontrado");
+
+    const closingCashCents = Math.round(Number(shiftClosingCash || 0) * 100);
+    if (!Number.isInteger(closingCashCents) || closingCashCents < 0) {
+      return setShiftMsg("Caja final inválida");
+    }
+
+    const differenceCents = closingCashCents - shift.openingCashCents;
+
+    setShiftBusy(true);
+    try {
+      const closedAtValue = shiftClosedAt
+        ? new Date(shiftClosedAt).getTime()
+        : Date.now();
+      if (shiftClosedAt && Number.isNaN(closedAtValue)) {
+        return setShiftMsg("Fecha de cierre inválida");
+      }
+
+      await closeCashShift(me.shopId, selectedShiftId, {
+        closingCashCents,
+        differenceCents,
+        closedAt: closedAtValue,
+      });
+
+      setShiftMsg("✅ Turno cerrado");
+      setShiftClosingCash("");
+      setShiftClosedAt(toInputDateTime(new Date()));
+      setSelectedShiftId(null);
+      await loadShifts();
+    } catch (error: any) {
+      setShiftMsg(`❌ ${error?.message || "Error al cerrar turno"}`);
+    } finally {
+      setShiftBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (me) load();
   }, [me, load]);
+
+  useEffect(() => {
+    if (me) loadShifts();
+  }, [me, loadShifts]);
 
   const totals = useMemo(() => {
     let income = 0;
@@ -224,6 +343,16 @@ export default function CashPage() {
       ...values,
     }));
   }, [items]);
+
+  const openShifts = useMemo(
+    () => shifts.filter((shift) => shift.status === "open"),
+    [shifts]
+  );
+
+  const selectedShift = useMemo(
+    () => shifts.find((shift) => shift.id === selectedShiftId) ?? null,
+    [shifts, selectedShiftId]
+  );
 
   if (loading) return <div className="p-6 text-zinc-200">Cargando…</div>;
   if (!me) return <div className="p-6 text-zinc-200">No autenticado.</div>;
@@ -284,6 +413,213 @@ export default function CashPage() {
           <p className="mt-2 text-lg font-semibold text-indigo-100">
             {centsToARS(totals.digitalNet)}
           </p>
+        </div>
+      </div>
+
+      {/* Turnos y arqueo */}
+      <div className="grid gap-4 rounded-2xl bg-zinc-900/40 p-5 ring-1 ring-zinc-800">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-100">
+              Turnos y arqueo por cajero
+            </h2>
+            <p className="text-sm text-zinc-400">
+              Registrá apertura/cierre con caja inicial/final y diferencias.
+            </p>
+          </div>
+          <div className="rounded-full bg-zinc-950 px-3 py-1 text-xs text-zinc-300 ring-1 ring-zinc-800">
+            {shifts.length} turnos
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-3 rounded-2xl bg-zinc-950/60 p-4 ring-1 ring-zinc-800">
+            <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+              Apertura de turno
+            </p>
+            <label className="grid gap-2 text-sm text-zinc-400">
+              Cajero/a
+              <input
+                value={shiftCashier}
+                onChange={(e) => setShiftCashier(e.target.value)}
+                disabled={shiftBusy}
+                className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+                placeholder="Nombre del cajero"
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-zinc-400">
+              Caja inicial (ARS)
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                value={shiftOpeningCash}
+                onChange={(e) => setShiftOpeningCash(e.target.value)}
+                disabled={shiftBusy}
+                className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+                placeholder="Ej: 15000"
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-zinc-400">
+              Fecha de apertura
+              <input
+                type="datetime-local"
+                value={shiftOpenedAt}
+                onChange={(e) => setShiftOpenedAt(e.target.value)}
+                disabled={shiftBusy}
+                className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={openShift}
+              disabled={shiftBusy}
+              className="rounded-xl bg-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-950 hover:bg-emerald-100 disabled:opacity-60"
+            >
+              {shiftBusy ? "Guardando…" : "Abrir turno"}
+            </button>
+          </div>
+
+          <div className="grid gap-3 rounded-2xl bg-zinc-950/60 p-4 ring-1 ring-zinc-800">
+            <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+              Cierre y arqueo
+            </p>
+            <label className="grid gap-2 text-sm text-zinc-400">
+              Turno abierto
+              <select
+                value={selectedShiftId ?? ""}
+                onChange={(e) =>
+                  setSelectedShiftId(e.target.value || null)
+                }
+                disabled={shiftBusy}
+                className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+              >
+                <option value="">Seleccionar turno</option>
+                {openShifts.map((shift) => (
+                  <option key={shift.id} value={shift.id}>
+                    {shift.cashierName} · {formatDate(shift.openedAt)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedShift && (
+              <div className="rounded-xl bg-zinc-900/60 p-3 text-xs text-zinc-300 ring-1 ring-zinc-800">
+                <p>
+                  Caja inicial:{" "}
+                  <span className="font-semibold">
+                    {centsToARS(selectedShift.openingCashCents)}
+                  </span>
+                </p>
+                <p>
+                  Abierto:{" "}
+                  <span className="font-semibold">
+                    {formatDate(selectedShift.openedAt)}
+                  </span>
+                </p>
+              </div>
+            )}
+            <label className="grid gap-2 text-sm text-zinc-400">
+              Caja final (ARS)
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                value={shiftClosingCash}
+                onChange={(e) => setShiftClosingCash(e.target.value)}
+                disabled={shiftBusy}
+                className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+                placeholder="Ej: 18000"
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-zinc-400">
+              Fecha de cierre
+              <input
+                type="datetime-local"
+                value={shiftClosedAt}
+                onChange={(e) => setShiftClosedAt(e.target.value)}
+                disabled={shiftBusy}
+                className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+              />
+            </label>
+            {selectedShift && shiftClosingCash && (
+              <div className="rounded-xl bg-zinc-900/60 p-3 text-xs text-zinc-300 ring-1 ring-zinc-800">
+                Diferencia:{" "}
+                <span className="font-semibold">
+                  {centsToARS(
+                    Math.round(Number(shiftClosingCash || 0) * 100) -
+                      selectedShift.openingCashCents
+                  )}
+                </span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={closeShift}
+              disabled={shiftBusy}
+              className="rounded-xl bg-rose-200 px-4 py-3 text-sm font-semibold text-rose-950 hover:bg-rose-100 disabled:opacity-60"
+            >
+              {shiftBusy ? "Guardando…" : "Cerrar turno"}
+            </button>
+          </div>
+        </div>
+
+        {shiftMsg && (
+          <div className="rounded-xl bg-zinc-950 p-3 text-sm text-zinc-200 ring-1 ring-zinc-800">
+            {shiftMsg}
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-sm text-zinc-400">
+            <h3 className="font-semibold text-zinc-300">Historial de turnos</h3>
+            <span>Últimos 20 registros</span>
+          </div>
+          {shifts.length === 0 && (
+            <p className="text-sm text-zinc-400">Sin turnos registrados.</p>
+          )}
+          {shifts.map((shift) => {
+            const difference = shift.differenceCents ?? 0;
+            const differenceClass =
+              difference > 0
+                ? "text-emerald-200"
+                : difference < 0
+                  ? "text-rose-200"
+                  : "text-zinc-200";
+            return (
+              <div
+                key={shift.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-zinc-950/60 px-4 py-3 ring-1 ring-zinc-800"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-zinc-100">
+                    {shift.cashierName}
+                    <span className="ml-2 rounded-full bg-zinc-900 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-zinc-400">
+                      {shift.status === "open" ? "Abierto" : "Cerrado"}
+                    </span>
+                  </p>
+                  <p className="text-xs text-zinc-400">
+                    Apertura: {formatDate(shift.openedAt)}
+                  </p>
+                  {shift.closedAt && (
+                    <p className="text-xs text-zinc-400">
+                      Cierre: {formatDate(shift.closedAt)}
+                    </p>
+                  )}
+                </div>
+                <div className="text-right text-sm text-zinc-200">
+                  <div>Caja inicial: {centsToARS(shift.openingCashCents)}</div>
+                  {shift.closingCashCents !== undefined && (
+                    <div>Caja final: {centsToARS(shift.closingCashCents)}</div>
+                  )}
+                  {shift.status === "closed" && (
+                    <div className={`font-semibold ${differenceClass}`}>
+                      Diferencia: {centsToARS(difference)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
