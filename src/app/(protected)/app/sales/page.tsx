@@ -104,10 +104,10 @@ export default function SalesPage() {
         limit(5)
       );
       const snap = await getDocs(q);
-      const list: SaleSummary[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as SaleSummary),
-      }));
+      const list: SaleSummary[] = snap.docs.map((d) => {
+        const data = d.data() as Omit<SaleSummary, "id">;
+        return { id: d.id, ...data };
+      });
       setRecentSales(list);
     })();
   }, [me?.shopId]);
