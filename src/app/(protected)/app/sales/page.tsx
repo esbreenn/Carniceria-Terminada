@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { collection, getDocs, limit, orderBy, query } from "firebase/firestore";
 import { firebaseDb } from "@/lib/firebase/client";
 import { useMe } from "@/lib/auth/useMe";
 import { createSale } from "@/lib/sales/client";
@@ -12,12 +12,30 @@ type Product = {
   name: string;
   unit: "kg" | "unit";
   salePriceCents: number;
+  costPerKgCents?: number;
   stockQty: number;
+};
+
+type SaleSummary = {
+  id: string;
+  productId: string;
+  productName: string;
+  qtyKg: number;
+  totalCents: number;
+  paymentMethod: PaymentMethod;
+  createdAt: number;
 };
 
 function centsToARS(cents: number) {
   const v = cents / 100;
   return v.toLocaleString("es-AR", { style: "currency", currency: "ARS" });
+}
+
+function formatTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString("es-AR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatKg(value: number) {
@@ -37,18 +55,27 @@ export default function SalesPage() {
 
   const [products, setProducts] = useState<Product[]>([]);
   const [productId, setProductId] = useState("");
+  const [search, setSearch] = useState("");
   const [mode, setMode] = useState<"kg" | "amount">("kg");
   const [qtyKg, setQtyKg] = useState("1");
   const [amountARS, setAmountARS] = useState("5000");
   const [method, setMethod] = useState<PaymentMethod>("cash");
+  const [recentSales, setRecentSales] = useState<SaleSummary[]>([]);
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const qtyInputRef = useRef<HTMLInputElement | null>(null);
 
   const selected = useMemo(
     () => products.find((p) => p.id === productId) || null,
     [products, productId]
   );
+
+  const filteredProducts = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return products;
+    return products.filter((p) => p.name.toLowerCase().includes(term));
+  }, [products, search]);
 
   useEffect(() => {
     (async () => {
@@ -68,12 +95,54 @@ export default function SalesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.shopId]);
 
+  useEffect(() => {
+    (async () => {
+      if (!me?.shopId) return;
+      const q = query(
+        collection(firebaseDb, `shops/${me.shopId}/sales`),
+        orderBy("createdAt", "desc"),
+        limit(5)
+      );
+      const snap = await getDocs(q);
+      const list: SaleSummary[] = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as SaleSummary),
+      }));
+      setRecentSales(list);
+    })();
+  }, [me?.shopId]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      qtyInputRef.current?.focus();
+    }, 0);
+    return () => clearTimeout(timeout);
+  }, [mode, productId]);
+
   function amountToCents(input: string) {
     // "5000" -> 5000 ARS -> 500000 cents
     const ars = Number(input);
     if (!Number.isFinite(ars)) return 0;
     return Math.round(ars * 100);
   }
+
+  const qtyError = useMemo(() => {
+    if (mode === "amount") return null;
+    if (!qtyKg.trim()) return "Ingresá una cantidad en kg.";
+    const q = Number(qtyKg);
+    if (!Number.isFinite(q)) return "Ingresá un número válido.";
+    if (q <= 0) return "La cantidad debe ser mayor a 0.";
+    return null;
+  }, [mode, qtyKg]);
+
+  const amountError = useMemo(() => {
+    if (mode === "kg") return null;
+    if (!amountARS.trim()) return "Ingresá un importe en pesos.";
+    const ars = Number(amountARS);
+    if (!Number.isFinite(ars)) return "Ingresá un número válido.";
+    if (ars <= 0) return "El importe debe ser mayor a 0.";
+    return null;
+  }, [amountARS, mode]);
 
   const preview = useMemo(() => {
     if (!selected) return null;
@@ -102,6 +171,24 @@ export default function SalesPage() {
     if (!selected || !preview) return null;
     return Number((selected.stockQty - preview.qtyKg).toFixed(3));
   }, [preview, selected]);
+
+  const marginInfo = useMemo(() => {
+    if (!selected?.costPerKgCents || !preview) return null;
+    const perKgCents = selected.salePriceCents - selected.costPerKgCents;
+    const totalCents = Math.round(preview.qtyKg * perKgCents);
+    return { perKgCents, totalCents };
+  }, [preview, selected]);
+
+  useEffect(() => {
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key !== "Enter") return;
+      if (busy || !preview || exceedsStock) return;
+      handleCreateSale();
+    }
+
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
+  }, [busy, exceedsStock, handleCreateSale, preview]);
 
   async function handleCreateSale() {
     setMsg(null);
@@ -145,6 +232,18 @@ export default function SalesPage() {
         return { ...p, stockQty: Number((p.stockQty - preview.qtyKg).toFixed(3)) };
       });
       setProducts(updated);
+      setRecentSales((prev) => {
+        const newSale: SaleSummary = {
+          id: `local-${Date.now()}`,
+          productId: selected.id,
+          productName: selected.name,
+          qtyKg: preview.qtyKg,
+          totalCents: preview.totalCents,
+          paymentMethod: method,
+          createdAt: Date.now(),
+        };
+        return [newSale, ...prev].slice(0, 5);
+      });
     } catch (e: any) {
       setMsg(`❌ ${e?.message || "Error"}`);
     } finally {
@@ -198,17 +297,26 @@ export default function SalesPage() {
             <div className="grid gap-6">
               <div className="grid gap-2">
                 <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Producto</label>
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="rounded-2xl border border-white/10 bg-zinc-950 px-4 py-2 text-sm text-white shadow-inner shadow-black/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
+                  placeholder="Buscar producto..."
+                />
                 <select
                   value={productId}
                   onChange={(e) => setProductId(e.target.value)}
                   className="rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white shadow-inner shadow-black/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
                 >
-                  {products.map((p) => (
+                  {filteredProducts.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name} — {centsToARS(p.salePriceCents)} / kg — stock {formatKg(p.stockQty)}
                     </option>
                   ))}
                 </select>
+                {!filteredProducts.length && (
+                  <p className="text-xs text-amber-300">No hay productos que coincidan con la búsqueda.</p>
+                )}
               </div>
 
               <div className="grid gap-2">
@@ -241,21 +349,37 @@ export default function SalesPage() {
                 <div className="grid gap-2">
                   <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Cantidad (kg)</label>
                   <input
+                    ref={qtyInputRef}
                     value={qtyKg}
                     onChange={(e) => setQtyKg(e.target.value)}
                     className="rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white shadow-inner shadow-black/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
                     placeholder="Ej: 1.25"
                   />
+                  <div className="flex flex-wrap gap-2">
+                    {[0.5, 1, 1.5].map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        onClick={() => setQtyKg(String(q))}
+                        className="rounded-full border border-white/10 bg-zinc-950 px-3 py-1 text-xs text-zinc-200 transition hover:border-emerald-400/60 hover:text-white"
+                      >
+                        {q} kg
+                      </button>
+                    ))}
+                  </div>
+                  {qtyError && <p className="text-xs text-amber-300">{qtyError}</p>}
                 </div>
               ) : (
                 <div className="grid gap-2">
                   <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Importe ($ ARS)</label>
                   <input
+                    ref={qtyInputRef}
                     value={amountARS}
                     onChange={(e) => setAmountARS(e.target.value)}
                     className="rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white shadow-inner shadow-black/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
                     placeholder="Ej: 5000"
                   />
+                  {amountError && <p className="text-xs text-amber-300">{amountError}</p>}
                 </div>
               )}
 
@@ -295,6 +419,12 @@ export default function SalesPage() {
                       </span>
                     </p>
                   )}
+                  {marginInfo && (
+                    <p className={marginInfo.perKgCents >= 0 ? "text-emerald-300" : "text-red-300"}>
+                      Margen estimado: {centsToARS(marginInfo.totalCents)} (
+                      {centsToARS(marginInfo.perKgCents)} / kg)
+                    </p>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -318,12 +448,50 @@ export default function SalesPage() {
             >
               {busy ? "Registrando…" : "Confirmar venta"}
             </button>
+            <p className="text-xs text-zinc-500">Atajo: Enter para confirmar.</p>
 
             <div className="rounded-2xl border border-white/10 bg-zinc-950/70 p-4 text-xs text-zinc-400">
               <p className="font-semibold uppercase tracking-widest text-zinc-500">Tip</p>
               <p className="mt-2">
                 Registrá la venta antes de cerrar caja para mantener el stock y la liquidez sincronizados.
               </p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-zinc-950/70 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                Ventas recientes
+              </p>
+              {recentSales.length ? (
+                <div className="mt-3 grid gap-3 text-xs text-zinc-200">
+                  {recentSales.map((sale) => (
+                    <div key={sale.id} className="rounded-xl border border-white/5 bg-zinc-900/60 p-3">
+                      <div className="flex items-center justify-between text-xs text-zinc-400">
+                        <span>{formatTime(sale.createdAt)}</span>
+                        <span>{paymentLabels[sale.paymentMethod]}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-white">{sale.productName}</p>
+                      <p className="mt-1 text-xs text-zinc-300">
+                        {formatKg(sale.qtyKg)} · {centsToARS(sale.totalCents)}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProductId(sale.productId);
+                          setMode("amount");
+                          setAmountARS(String(sale.totalCents / 100));
+                          setSearch("");
+                          setMsg(null);
+                        }}
+                        className="mt-2 rounded-full border border-emerald-400/40 px-3 py-1 text-xs text-emerald-200 transition hover:border-emerald-300 hover:text-emerald-100"
+                      >
+                        Repetir monto
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-zinc-500">Todavía no hay ventas recientes.</p>
+              )}
             </div>
           </div>
         </div>
