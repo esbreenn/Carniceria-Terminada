@@ -20,6 +20,18 @@ function centsToARS(cents: number) {
   return v.toLocaleString("es-AR", { style: "currency", currency: "ARS" });
 }
 
+function formatKg(value: number) {
+  return `${value.toFixed(3).replace(/\.?0+$/, "")} kg`;
+}
+
+const paymentLabels: Record<PaymentMethod, string> = {
+  cash: "Efectivo",
+  transfer: "Transferencia",
+  debit: "Débito",
+  credit: "Crédito",
+  mp: "Mercado Pago",
+};
+
 export default function SalesPage() {
   const { me, loading } = useMe();
 
@@ -72,14 +84,24 @@ export default function SalesPage() {
       const q = Number(qtyKg);
       if (!Number.isFinite(q) || q <= 0) return null;
       const totalCents = Math.round(q * pricePerKgCents);
-      return { qtyKg: q, totalCents };
+      return { qtyKg: q, totalCents, pricePerKgCents };
     } else {
       const totalCents = amountToCents(amountARS);
       if (!Number.isInteger(totalCents) || totalCents <= 0) return null;
       const q = Number((totalCents / pricePerKgCents).toFixed(3));
-      return { qtyKg: q, totalCents };
+      return { qtyKg: q, totalCents, pricePerKgCents };
     }
   }, [selected, mode, qtyKg, amountARS]);
+
+  const exceedsStock = useMemo(() => {
+    if (!selected || !preview) return false;
+    return preview.qtyKg > selected.stockQty;
+  }, [preview, selected]);
+
+  const stockAfter = useMemo(() => {
+    if (!selected || !preview) return null;
+    return Number((selected.stockQty - preview.qtyKg).toFixed(3));
+  }, [preview, selected]);
 
   async function handleCreateSale() {
     setMsg(null);
@@ -161,8 +183,11 @@ export default function SalesPage() {
               <div>
                 <p className="text-xs text-zinc-400">Stock</p>
                 <p className="text-sm font-medium text-white">
-                  {selected ? `${selected.stockQty} kg` : "—"}
+                  {selected ? formatKg(selected.stockQty) : "—"}
                 </p>
+                {selected && selected.stockQty <= 2 ? (
+                  <p className="mt-1 text-xs text-amber-300">Stock bajo</p>
+                ) : null}
               </div>
             </div>
           </div>
@@ -180,7 +205,7 @@ export default function SalesPage() {
                 >
                   {products.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} — {centsToARS(p.salePriceCents)} / kg — stock {p.stockQty} kg
+                      {p.name} — {centsToARS(p.salePriceCents)} / kg — stock {formatKg(p.stockQty)}
                     </option>
                   ))}
                 </select>
@@ -241,11 +266,11 @@ export default function SalesPage() {
                   onChange={(e) => setMethod(e.target.value as PaymentMethod)}
                   className="rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white shadow-inner shadow-black/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
                 >
-                  <option value="cash">cash</option>
-                  <option value="transfer">transfer</option>
-                  <option value="debit">debit</option>
-                  <option value="credit">credit</option>
-                  <option value="mp">mp</option>
+                  {(Object.keys(paymentLabels) as PaymentMethod[]).map((key) => (
+                    <option key={key} value={key}>
+                      {paymentLabels[key]}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -256,10 +281,29 @@ export default function SalesPage() {
               <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Previsualización</p>
               <p className="mt-2 text-sm text-zinc-200">
                 {preview
-                  ? `Cantidad: ${preview.qtyKg} kg — Total: ${centsToARS(preview.totalCents)}`
+                  ? `Cantidad: ${formatKg(preview.qtyKg)} — Total: ${centsToARS(preview.totalCents)}`
                   : "Completa los datos"}
               </p>
+              {preview ? (
+                <div className="mt-3 grid gap-1 text-xs text-zinc-400">
+                  <p>Precio por kg: {centsToARS(preview.pricePerKgCents)}</p>
+                  {stockAfter !== null && (
+                    <p>
+                      Stock luego de la venta:{" "}
+                      <span className={exceedsStock ? "text-red-300" : "text-zinc-200"}>
+                        {formatKg(stockAfter)}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
+
+            {exceedsStock && (
+              <div className="rounded-2xl border border-red-400/40 bg-red-500/10 p-4 text-sm text-red-200">
+                La cantidad supera el stock disponible. Ajustá el peso o el importe.
+              </div>
+            )}
 
             {msg && (
               <div className="rounded-2xl border border-white/10 bg-zinc-950/70 p-4 text-sm text-zinc-100">
@@ -268,7 +312,7 @@ export default function SalesPage() {
             )}
 
             <button
-              disabled={busy || !preview}
+              disabled={busy || !preview || exceedsStock}
               onClick={handleCreateSale}
               className="rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-300 disabled:opacity-60"
             >
