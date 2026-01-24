@@ -12,6 +12,13 @@ function centsToARS(cents: number) {
   });
 }
 
+function formatDate(timestamp: number) {
+  return new Date(timestamp).toLocaleString("es-AR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 export default function CashPage() {
   const { me, loading } = useMe();
 
@@ -26,6 +33,13 @@ export default function CashPage() {
   const [msg, setMsg] = useState<string | null>(null);
 
   const amountCents = Math.round(Number(amountARS || 0) * 100);
+  const methodLabels: Record<PaymentMethod, string> = {
+    cash: "Efectivo",
+    transfer: "Transferencia",
+    debit: "Débito",
+    credit: "Crédito",
+    mp: "Mercado Pago",
+  };
 
   async function load() {
     if (!me) return;
@@ -77,6 +91,7 @@ export default function CashPage() {
       income,
       expense,
       net: income - expense,
+      count: items.length,
     };
   }, [items]);
 
@@ -84,81 +99,138 @@ export default function CashPage() {
   if (!me) return <div className="p-6 text-zinc-200">No autenticado.</div>;
 
   return (
-    <div className="p-6 text-zinc-100 space-y-6">
-      <h1 className="text-xl font-semibold">Caja</h1>
+    <div className="space-y-6 p-6 text-zinc-100">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Caja</h1>
+          <p className="text-sm text-zinc-400">
+            Registrá ingresos y egresos con detalle de método, categoría y notas.
+          </p>
+        </div>
+        <div className="rounded-full bg-zinc-900/60 px-3 py-1 text-xs text-zinc-300 ring-1 ring-zinc-800">
+          {totals.count} movimientos registrados
+        </div>
+      </div>
 
       {/* Resumen */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-xl bg-zinc-900/40 p-3 ring-1 ring-zinc-800">
-          <p className="text-xs text-zinc-400">Ingresos</p>
-          <p className="font-semibold">{centsToARS(totals.income)}</p>
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="rounded-2xl bg-emerald-500/10 p-4 ring-1 ring-emerald-500/20">
+          <p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">
+            Ingresos
+          </p>
+          <p className="mt-2 text-lg font-semibold text-emerald-100">
+            {centsToARS(totals.income)}
+          </p>
         </div>
-        <div className="rounded-xl bg-zinc-900/40 p-3 ring-1 ring-zinc-800">
-          <p className="text-xs text-zinc-400">Egresos</p>
-          <p className="font-semibold">{centsToARS(totals.expense)}</p>
+        <div className="rounded-2xl bg-rose-500/10 p-4 ring-1 ring-rose-500/20">
+          <p className="text-xs uppercase tracking-[0.2em] text-rose-200/70">
+            Egresos
+          </p>
+          <p className="mt-2 text-lg font-semibold text-rose-100">
+            {centsToARS(totals.expense)}
+          </p>
         </div>
-        <div className="rounded-xl bg-zinc-900/40 p-3 ring-1 ring-zinc-800">
-          <p className="text-xs text-zinc-400">Neto</p>
-          <p className="font-semibold">{centsToARS(totals.net)}</p>
+        <div className="rounded-2xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800">
+          <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">
+            Neto
+          </p>
+          <p className="mt-2 text-lg font-semibold">{centsToARS(totals.net)}</p>
         </div>
       </div>
 
       {/* Formulario */}
-      <div className="grid gap-4 rounded-2xl bg-zinc-900/40 p-4 ring-1 ring-zinc-800">
-        <div className="flex gap-2">
-          <button
-            onClick={() => setDirection("in")}
-            className={`rounded-xl px-3 py-2 ring-1 ring-zinc-800 ${
-              direction === "in" ? "bg-zinc-100 text-zinc-950" : "bg-zinc-950"
-            }`}
-          >
-            Ingreso
-          </button>
-          <button
-            onClick={() => setDirection("out")}
-            className={`rounded-xl px-3 py-2 ring-1 ring-zinc-800 ${
-              direction === "out" ? "bg-zinc-100 text-zinc-950" : "bg-zinc-950"
-            }`}
-          >
-            Egreso
-          </button>
+      <div className="grid gap-4 rounded-2xl bg-zinc-900/40 p-5 ring-1 ring-zinc-800">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+            Tipo de movimiento
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={() => setDirection("in")}
+              className={`rounded-xl px-4 py-2 text-sm ring-1 ring-zinc-800 ${
+                direction === "in"
+                  ? "bg-zinc-100 text-zinc-950"
+                  : "bg-zinc-950"
+              }`}
+            >
+              Ingreso
+            </button>
+            <button
+              onClick={() => setDirection("out")}
+              className={`rounded-xl px-4 py-2 text-sm ring-1 ring-zinc-800 ${
+                direction === "out"
+                  ? "bg-zinc-100 text-zinc-950"
+                  : "bg-zinc-950"
+              }`}
+            >
+              Egreso
+            </button>
+          </div>
         </div>
 
-        <select
-          value={method}
-          onChange={(e) => setMethod(e.target.value as PaymentMethod)}
-          className="rounded-xl bg-zinc-950 px-3 py-2 ring-1 ring-zinc-800"
-        >
-          <option value="cash">cash</option>
-          <option value="transfer">transfer</option>
-          <option value="debit">debit</option>
-          <option value="credit">credit</option>
-          <option value="mp">mp</option>
-        </select>
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="grid gap-2 text-sm text-zinc-400">
+            Método de pago
+            <select
+              value={method}
+              onChange={(e) => setMethod(e.target.value as PaymentMethod)}
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+            >
+              {Object.entries(methodLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <input
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="rounded-xl bg-zinc-950 px-3 py-2 ring-1 ring-zinc-800"
-          placeholder="proveedor, alquiler, sueldos..."
-        />
+          <label className="grid gap-2 text-sm text-zinc-400">
+            Categoría
+            <input
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              list="cash-category"
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+              placeholder="Proveedor, alquiler, sueldos..."
+            />
+          </label>
+        </div>
 
-        <input
-          value={amountARS}
-          onChange={(e) => setAmountARS(e.target.value)}
-          className="rounded-xl bg-zinc-950 px-3 py-2 ring-1 ring-zinc-800"
-          placeholder="Monto en ARS"
-        />
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="grid gap-2 text-sm text-zinc-400">
+            Monto en ARS
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              value={amountARS}
+              onChange={(e) => setAmountARS(e.target.value)}
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+              placeholder="Ej: 5000"
+            />
+          </label>
 
-        <input
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          className="rounded-xl bg-zinc-950 px-3 py-2 ring-1 ring-zinc-800"
-          placeholder="Nota (opcional)"
-        />
+          <label className="grid gap-2 text-sm text-zinc-400">
+            Nota (opcional)
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+              placeholder="Detalle breve para el movimiento"
+            />
+          </label>
+        </div>
+
+        <datalist id="cash-category">
+          <option value="Proveedor" />
+          <option value="Alquiler" />
+          <option value="Sueldos" />
+          <option value="Servicios" />
+          <option value="Mantenimiento" />
+        </datalist>
 
         {msg && (
-          <div className="rounded-xl bg-zinc-950 p-3 ring-1 ring-zinc-800 text-sm">
+          <div className="rounded-xl bg-zinc-950 p-3 text-sm text-zinc-200 ring-1 ring-zinc-800">
             {msg}
           </div>
         )}
@@ -174,9 +246,10 @@ export default function CashPage() {
 
       {/* Lista */}
       <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-zinc-300">
-          Movimientos recientes
-        </h2>
+        <div className="flex items-center justify-between text-sm text-zinc-400">
+          <h2 className="font-semibold text-zinc-300">Movimientos recientes</h2>
+          <span>Últimos 50 registros</span>
+        </div>
 
         {items.length === 0 && (
           <p className="text-sm text-zinc-400">Sin movimientos.</p>
@@ -185,15 +258,20 @@ export default function CashPage() {
         {items.map((m) => (
           <div
             key={m.id}
-            className="flex items-center justify-between rounded-xl bg-zinc-900/40 px-4 py-2 ring-1 ring-zinc-800"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-zinc-900/40 px-4 py-3 ring-1 ring-zinc-800"
           >
             <div>
               <p className="text-sm">
                 {m.direction === "in" ? "➕" : "➖"} {m.category}
               </p>
-              <p className="text-xs text-zinc-400">{m.method}</p>
+              <p className="text-xs text-zinc-400">
+                {methodLabels[m.method]} · {formatDate(m.createdAt)}
+              </p>
+              {m.note && (
+                <p className="text-xs text-zinc-500">{m.note}</p>
+              )}
             </div>
-            <div className="font-semibold">
+            <div className="text-right font-semibold">
               {centsToARS(m.amountCents)}
             </div>
           </div>
