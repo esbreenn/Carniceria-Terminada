@@ -1,9 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMe } from "@/lib/auth/useMe";
 import { createCashMovement, listCashMovements } from "@/lib/cash/client";
 import type { PaymentMethod, CashDirection, CashMovement } from "@/lib/cash/types";
+
+const MAX_AMOUNT_ARS = 1_000_000;
+const METHOD_LABELS: Record<PaymentMethod, string> = {
+  cash: "Efectivo",
+  transfer: "Transferencia",
+  debit: "Débito",
+  credit: "Crédito",
+  mp: "Mercado Pago",
+};
 
 function centsToARS(cents: number) {
   return (cents / 100).toLocaleString("es-AR", {
@@ -19,53 +28,94 @@ function formatDate(timestamp: number) {
   });
 }
 
+function toTitleCase(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function toInputDateTime(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
+}
+
 export default function CashPage() {
   const { me, loading } = useMe();
 
   const [direction, setDirection] = useState<CashDirection>("out");
   const [method, setMethod] = useState<PaymentMethod>("cash");
-  const [category, setCategory] = useState("proveedor");
+  const [category, setCategory] = useState("Proveedor");
   const [amountARS, setAmountARS] = useState("5000");
   const [note, setNote] = useState("");
+  const [occurredAt, setOccurredAt] = useState(() =>
+    toInputDateTime(new Date())
+  );
 
   const [items, setItems] = useState<CashMovement[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const amountCents = Math.round(Number(amountARS || 0) * 100);
-  const methodLabels: Record<PaymentMethod, string> = {
-    cash: "Efectivo",
-    transfer: "Transferencia",
-    debit: "Débito",
-    credit: "Crédito",
-    mp: "Mercado Pago",
-  };
+  const categorySuggestions = useMemo(() => {
+    if (direction === "in") {
+      return ["Ventas", "Ajuste", "Préstamo", "Recupero"];
+    }
+    return [
+      "Proveedor",
+      "Sueldos",
+      "Servicios",
+      "Flete",
+      "Impuestos",
+      "Mantenimiento",
+      "Caja chica",
+    ];
+  }, [direction]);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!me) return;
-    const rows = await listCashMovements(me.shopId, 50);
-    setItems(rows);
-  }
+    try {
+      const rows = await listCashMovements(me.shopId, 50);
+      setItems(rows);
+    } catch (error: any) {
+      setMsg(`❌ ${error?.message || "Error al cargar movimientos"}`);
+    }
+  }, [me]);
 
   async function submit() {
+    if (busy) return;
     setMsg(null);
     if (!me) return setMsg("No autenticado");
     if (!category.trim()) return setMsg("Categoría requerida");
     if (!Number.isInteger(amountCents) || amountCents <= 0)
       return setMsg("Monto inválido");
+    if (amountCents > MAX_AMOUNT_ARS * 100)
+      return setMsg("Monto excede el máximo permitido");
 
     setBusy(true);
     try {
+      const occurredAtValue = occurredAt
+        ? new Date(occurredAt).getTime()
+        : Date.now();
+      if (occurredAt && Number.isNaN(occurredAtValue)) {
+        return setMsg("Fecha inválida");
+      }
       await createCashMovement(me.shopId, {
         direction,
         method,
         category: category.trim(),
         amountCents,
         note: note.trim() || undefined,
+        occurredAt: occurredAtValue,
       });
 
       setMsg("✅ Movimiento registrado");
       setNote("");
+      setOccurredAt(toInputDateTime(new Date()));
       await load();
     } catch (e: any) {
       setMsg(`❌ ${e?.message || "Error"}`);
@@ -76,7 +126,7 @@ export default function CashPage() {
 
   useEffect(() => {
     if (me) load();
-  }, [me]);
+  }, [me, load]);
 
   const totals = useMemo(() => {
     let income = 0;
@@ -93,6 +143,25 @@ export default function CashPage() {
       net: income - expense,
       count: items.length,
     };
+  }, [items]);
+
+  const breakdownByMethod = useMemo(() => {
+    const byMethod = new Map<PaymentMethod, { in: number; out: number }>();
+    for (const methodKey of Object.keys(METHOD_LABELS) as PaymentMethod[]) {
+      byMethod.set(methodKey, { in: 0, out: 0 });
+    }
+
+    for (const movement of items) {
+      const entry = byMethod.get(movement.method);
+      if (!entry) continue;
+      if (movement.direction === "in") entry.in += movement.amountCents;
+      else entry.out += movement.amountCents;
+    }
+
+    return Array.from(byMethod.entries()).map(([methodKey, values]) => ({
+      method: methodKey,
+      ...values,
+    }));
   }, [items]);
 
   if (loading) return <div className="p-6 text-zinc-200">Cargando…</div>;
@@ -147,6 +216,7 @@ export default function CashPage() {
           <div className="mt-2 flex gap-2">
             <button
               onClick={() => setDirection("in")}
+              disabled={busy}
               className={`rounded-xl px-4 py-2 text-sm ring-1 ring-zinc-800 ${
                 direction === "in"
                   ? "bg-zinc-100 text-zinc-950"
@@ -157,6 +227,7 @@ export default function CashPage() {
             </button>
             <button
               onClick={() => setDirection("out")}
+              disabled={busy}
               className={`rounded-xl px-4 py-2 text-sm ring-1 ring-zinc-800 ${
                 direction === "out"
                   ? "bg-zinc-100 text-zinc-950"
@@ -174,9 +245,10 @@ export default function CashPage() {
             <select
               value={method}
               onChange={(e) => setMethod(e.target.value as PaymentMethod)}
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+              disabled={busy}
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
             >
-              {Object.entries(methodLabels).map(([value, label]) => (
+              {Object.entries(METHOD_LABELS).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
                 </option>
@@ -190,7 +262,8 @@ export default function CashPage() {
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               list="cash-category"
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+              disabled={busy}
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
               placeholder="Proveedor, alquiler, sueldos..."
             />
           </label>
@@ -203,9 +276,11 @@ export default function CashPage() {
               type="number"
               inputMode="decimal"
               min="0"
+              max={MAX_AMOUNT_ARS}
               value={amountARS}
               onChange={(e) => setAmountARS(e.target.value)}
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+              disabled={busy}
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
               placeholder="Ej: 5000"
             />
           </label>
@@ -215,18 +290,28 @@ export default function CashPage() {
             <input
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800"
+              disabled={busy}
+              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
               placeholder="Detalle breve para el movimiento"
             />
           </label>
         </div>
 
+        <label className="grid gap-2 text-sm text-zinc-400">
+          Fecha del movimiento
+          <input
+            type="datetime-local"
+            value={occurredAt}
+            onChange={(e) => setOccurredAt(e.target.value)}
+            disabled={busy}
+            className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+          />
+        </label>
+
         <datalist id="cash-category">
-          <option value="Proveedor" />
-          <option value="Alquiler" />
-          <option value="Sueldos" />
-          <option value="Servicios" />
-          <option value="Mantenimiento" />
+          {categorySuggestions.map((suggestion) => (
+            <option key={suggestion} value={suggestion} />
+          ))}
         </datalist>
 
         {msg && (
@@ -242,6 +327,27 @@ export default function CashPage() {
         >
           {busy ? "Guardando…" : "Registrar movimiento"}
         </button>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {breakdownByMethod.map((row) => (
+          <div
+            key={row.method}
+            className="rounded-2xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800"
+          >
+            <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">
+              {METHOD_LABELS[row.method]}
+            </p>
+            <div className="mt-2 grid gap-1 text-sm">
+              <p className="text-emerald-200">
+                Ingresos: {centsToARS(row.in)}
+              </p>
+              <p className="text-rose-200">
+                Egresos: {centsToARS(row.out)}
+              </p>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Lista */}
@@ -262,10 +368,12 @@ export default function CashPage() {
           >
             <div>
               <p className="text-sm">
-                {m.direction === "in" ? "➕" : "➖"} {m.category}
+                {m.direction === "in" ? "➕" : "➖"}{" "}
+                {toTitleCase(m.category)}
               </p>
               <p className="text-xs text-zinc-400">
-                {methodLabels[m.method]} · {formatDate(m.createdAt)}
+                {METHOD_LABELS[m.method]} ·{" "}
+                {formatDate(m.occurredAt ?? m.createdAt)}
               </p>
               {m.note && (
                 <p className="text-xs text-zinc-500">{m.note}</p>

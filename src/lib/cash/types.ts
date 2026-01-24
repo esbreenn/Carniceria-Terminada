@@ -16,6 +16,7 @@ export type CreateCashInput = {
   category: string;      // proveedor, alquiler, sueldos, etc
   amountCents: number;   // siempre int, en centavos
   note?: string;
+  occurredAt?: number;   // fecha/hora del movimiento (ms)
 };
 
 // Movimiento completo guardado en Firestore
@@ -26,6 +27,7 @@ export type CashMovement = {
   category: string;
   amountCents: number;
   note?: string;
+  occurredAt?: number;
   createdAt: number;     // Date.now()
   createdBy: string;     // uid del usuario
 };

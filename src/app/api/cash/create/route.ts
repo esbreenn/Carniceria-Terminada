@@ -4,6 +4,11 @@ import { FieldValue } from "firebase-admin/firestore";
 
 type PaymentMethod = "cash" | "transfer" | "debit" | "credit" | "mp";
 type Direction = "in" | "out";
+const MAX_AMOUNT_CENTS = 100_000_000;
+
+function normalizeCategory(category: string) {
+  return category.trim().toLowerCase();
+}
 
 function formatKeysAR(now: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -36,8 +41,9 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => null);
     const direction = body?.direction as Direction;
     const method = body?.method as PaymentMethod;
-    const category = String(body?.category || "").trim();
+    const category = normalizeCategory(String(body?.category || ""));
     const amountCents = Number(body?.amountCents);
+    const occurredAtRaw = body?.occurredAt;
     const note = String(body?.note || "").trim();
 
     if (!["in", "out"].includes(direction))
@@ -50,6 +56,8 @@ export async function POST(req: Request) {
 
     if (!Number.isInteger(amountCents) || amountCents <= 0)
       return NextResponse.json({ error: "amountCents inválido" }, { status: 400 });
+    if (amountCents > MAX_AMOUNT_CENTS)
+      return NextResponse.json({ error: "amountCents excede el máximo" }, { status: 400 });
 
     const userSnap = await adminDb.collection("users").doc(uid).get();
     if (!userSnap.exists) return NextResponse.json({ error: "UserDoc missing" }, { status: 401 });
@@ -57,7 +65,11 @@ export async function POST(req: Request) {
     const { shopId } = userSnap.data() as { shopId: string };
 
     const now = new Date();
-    const { dayKey, monthKey } = formatKeysAR(now);
+    const occurredAt =
+      typeof occurredAtRaw === "number" && Number.isFinite(occurredAtRaw)
+        ? new Date(occurredAtRaw)
+        : now;
+    const { dayKey, monthKey } = formatKeysAR(occurredAt);
 
     const shopRef = adminDb.collection("shops").doc(shopId);
     const cashCol = shopRef.collection("cash_movements");
@@ -71,6 +83,7 @@ export async function POST(req: Request) {
 
       tx.set(cashRef, {
         createdAt: now.getTime(),
+        occurredAt: occurredAt.getTime(),
         type: "manual",
         direction,
         method,
