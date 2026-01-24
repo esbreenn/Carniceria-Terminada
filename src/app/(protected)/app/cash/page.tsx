@@ -49,9 +49,10 @@ export default function CashPage() {
   const { me, loading } = useMe();
 
   const [direction, setDirection] = useState<CashDirection>("out");
-  const [method, setMethod] = useState<PaymentMethod>("cash");
   const [category, setCategory] = useState("Proveedor");
-  const [amountARS, setAmountARS] = useState("5000");
+  const [splitMethods, setSplitMethods] = useState<
+    { id: string; method: PaymentMethod; amountARS: string }[]
+  >([{ id: crypto.randomUUID(), method: "cash", amountARS: "5000" }]);
   const [note, setNote] = useState("");
   const [occurredAt, setOccurredAt] = useState(() =>
     toInputDateTime(new Date())
@@ -61,7 +62,9 @@ export default function CashPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const amountCents = Math.round(Number(amountARS || 0) * 100);
+  const totalAmountCents = splitMethods.reduce((acc, entry) => {
+    return acc + Math.round(Number(entry.amountARS || 0) * 100);
+  }, 0);
   const categorySuggestions = useMemo(() => {
     if (direction === "in") {
       return ["Ventas", "Ajuste", "Préstamo", "Recupero"];
@@ -76,6 +79,25 @@ export default function CashPage() {
       "Caja chica",
     ];
   }, [direction]);
+
+  const canRemoveSplit = splitMethods.length > 1;
+
+  function addSplitMethod() {
+    setSplitMethods((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), method: "cash", amountARS: "" },
+    ]);
+  }
+
+  function removeSplitMethod(id: string) {
+    setSplitMethods((prev) => prev.filter((entry) => entry.id !== id));
+  }
+
+  function updateSplitMethod(id: string, updates: Partial<(typeof splitMethods)[0]>) {
+    setSplitMethods((prev) =>
+      prev.map((entry) => (entry.id === id ? { ...entry, ...updates } : entry))
+    );
+  }
 
   const load = useCallback(async () => {
     if (!me) return;
@@ -92,9 +114,9 @@ export default function CashPage() {
     setMsg(null);
     if (!me) return setMsg("No autenticado");
     if (!category.trim()) return setMsg("Categoría requerida");
-    if (!Number.isInteger(amountCents) || amountCents <= 0)
+    if (!Number.isInteger(totalAmountCents) || totalAmountCents <= 0)
       return setMsg("Monto inválido");
-    if (amountCents > MAX_AMOUNT_ARS * 100)
+    if (totalAmountCents > MAX_AMOUNT_ARS * 100)
       return setMsg("Monto excede el máximo permitido");
 
     setBusy(true);
@@ -105,18 +127,41 @@ export default function CashPage() {
       if (occurredAt && Number.isNaN(occurredAtValue)) {
         return setMsg("Fecha inválida");
       }
-      await createCashMovement(me.shopId, {
-        direction,
-        method,
-        category: category.trim(),
-        amountCents,
-        note: note.trim() || undefined,
-        occurredAt: occurredAtValue,
-      });
+
+      const validSplits = splitMethods
+        .map((entry) => ({
+          ...entry,
+          amountCents: Math.round(Number(entry.amountARS || 0) * 100),
+        }))
+        .filter((entry) => entry.amountCents > 0);
+
+      if (validSplits.length === 0) {
+        return setMsg("Agregá al menos un método con monto válido");
+      }
+
+      if (validSplits.some((entry) => entry.amountCents > MAX_AMOUNT_ARS * 100)) {
+        return setMsg("Uno de los montos excede el máximo permitido");
+      }
+
+      await Promise.all(
+        validSplits.map((entry) =>
+          createCashMovement(me.shopId, {
+            direction,
+            method: entry.method,
+            category: category.trim(),
+            amountCents: entry.amountCents,
+            note: note.trim() || undefined,
+            occurredAt: occurredAtValue,
+          })
+        )
+      );
 
       setMsg("✅ Movimiento registrado");
       setNote("");
       setOccurredAt(toInputDateTime(new Date()));
+      setSplitMethods([
+        { id: crypto.randomUUID(), method: "cash", amountARS: "5000" },
+      ]);
       await load();
     } catch (e: any) {
       setMsg(`❌ ${e?.message || "Error"}`);
@@ -274,63 +319,109 @@ export default function CashPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <label className="grid gap-2 text-sm text-zinc-400">
-            Método de pago
-            <select
-              value={method}
-              onChange={(e) => setMethod(e.target.value as PaymentMethod)}
+        <label className="grid gap-2 text-sm text-zinc-400">
+          Categoría
+          <input
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            list="cash-category"
+            disabled={busy}
+            className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+            placeholder="Proveedor, alquiler, sueldos..."
+          />
+        </label>
+
+        <div className="grid gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+              Métodos de pago (split)
+            </p>
+            <button
+              type="button"
+              onClick={addSplitMethod}
               disabled={busy}
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+              className="rounded-full bg-zinc-950 px-3 py-1 text-xs text-zinc-200 ring-1 ring-zinc-800 disabled:opacity-60"
             >
-              {Object.entries(METHOD_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
+              + Agregar método
+            </button>
+          </div>
 
-          <label className="grid gap-2 text-sm text-zinc-400">
-            Categoría
-            <input
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              list="cash-category"
-              disabled={busy}
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
-              placeholder="Proveedor, alquiler, sueldos..."
-            />
-          </label>
+          <div className="grid gap-3">
+            {splitMethods.map((entry, index) => (
+              <div
+                key={entry.id}
+                className="grid gap-3 md:grid-cols-[1fr_1fr_auto]"
+              >
+                <label className="grid gap-2 text-sm text-zinc-400">
+                  Método
+                  <select
+                    value={entry.method}
+                    onChange={(e) =>
+                      updateSplitMethod(entry.id, {
+                        method: e.target.value as PaymentMethod,
+                      })
+                    }
+                    disabled={busy}
+                    className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+                  >
+                    {Object.entries(METHOD_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="grid gap-2 text-sm text-zinc-400">
+                  Monto en ARS
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    max={MAX_AMOUNT_ARS}
+                    value={entry.amountARS}
+                    onChange={(e) =>
+                      updateSplitMethod(entry.id, {
+                        amountARS: e.target.value,
+                      })
+                    }
+                    disabled={busy}
+                    className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+                    placeholder="Ej: 5000"
+                  />
+                </label>
+
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={() => removeSplitMethod(entry.id)}
+                    disabled={busy || !canRemoveSplit}
+                    className="rounded-xl bg-zinc-950 px-3 py-2 text-xs text-zinc-200 ring-1 ring-zinc-800 disabled:opacity-50"
+                  >
+                    Quitar
+                  </button>
+                </div>
+
+                {index === splitMethods.length - 1 && (
+                  <p className="text-xs text-zinc-500 md:col-span-3">
+                    Total actual: {centsToARS(totalAmountCents)}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <label className="grid gap-2 text-sm text-zinc-400">
-            Monto en ARS
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              max={MAX_AMOUNT_ARS}
-              value={amountARS}
-              onChange={(e) => setAmountARS(e.target.value)}
-              disabled={busy}
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
-              placeholder="Ej: 5000"
-            />
-          </label>
-
-          <label className="grid gap-2 text-sm text-zinc-400">
-            Nota (opcional)
-            <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              disabled={busy}
-              className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
-              placeholder="Detalle breve para el movimiento"
-            />
-          </label>
-        </div>
+        <label className="grid gap-2 text-sm text-zinc-400">
+          Nota (opcional)
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            disabled={busy}
+            className="rounded-xl bg-zinc-950 px-3 py-2 text-sm text-zinc-100 ring-1 ring-zinc-800 disabled:opacity-60"
+            placeholder="Detalle breve para el movimiento"
+          />
+        </label>
 
         <label className="grid gap-2 text-sm text-zinc-400">
           Fecha del movimiento
