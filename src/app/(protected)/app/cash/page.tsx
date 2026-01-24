@@ -13,6 +13,7 @@ const METHOD_LABELS: Record<PaymentMethod, string> = {
   credit: "Crédito",
   mp: "Mercado Pago",
 };
+const DIGITAL_METHODS: PaymentMethod[] = ["transfer", "debit", "credit", "mp"];
 
 function centsToARS(cents: number) {
   return (cents / 100).toLocaleString("es-AR", {
@@ -131,10 +132,23 @@ export default function CashPage() {
   const totals = useMemo(() => {
     let income = 0;
     let expense = 0;
+    let cashIncome = 0;
+    let cashExpense = 0;
+    let digitalIncome = 0;
+    let digitalExpense = 0;
 
     for (const m of items) {
       if (m.direction === "in") income += m.amountCents;
       else expense += m.amountCents;
+
+      const isDigital = DIGITAL_METHODS.includes(m.method);
+      if (m.direction === "in") {
+        if (isDigital) digitalIncome += m.amountCents;
+        else cashIncome += m.amountCents;
+      } else {
+        if (isDigital) digitalExpense += m.amountCents;
+        else cashExpense += m.amountCents;
+      }
     }
 
     return {
@@ -142,6 +156,8 @@ export default function CashPage() {
       expense,
       net: income - expense,
       count: items.length,
+      cashNet: cashIncome - cashExpense,
+      digitalNet: digitalIncome - digitalExpense,
     };
   }, [items]);
 
@@ -204,6 +220,25 @@ export default function CashPage() {
             Neto
           </p>
           <p className="mt-2 text-lg font-semibold">{centsToARS(totals.net)}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl bg-zinc-900/60 p-4 ring-1 ring-zinc-800">
+          <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">
+            Caja física (efectivo)
+          </p>
+          <p className="mt-2 text-lg font-semibold text-zinc-100">
+            {centsToARS(totals.cashNet)}
+          </p>
+        </div>
+        <div className="rounded-2xl bg-indigo-500/10 p-4 ring-1 ring-indigo-500/20">
+          <p className="text-xs uppercase tracking-[0.2em] text-indigo-200/70">
+            Digital (MP/transfer/tarjeta)
+          </p>
+          <p className="mt-2 text-lg font-semibold text-indigo-100">
+            {centsToARS(totals.digitalNet)}
+          </p>
         </div>
       </div>
 
