@@ -1,14 +1,7 @@
 import { NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase/admin";
+import type { PaymentMethod } from "@/lib/sales/types";
 import { FieldValue } from "firebase-admin/firestore";
-
-type PaymentMethod = "cash" | "transfer" | "debit" | "credit" | "mp";
-type Direction = "in" | "out";
-const MAX_AMOUNT_CENTS = 100_000_000;
-
-function normalizeCategory(category: string) {
-  return category.trim().toLowerCase();
-}
 
 function formatKeysAR(now: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -33,105 +26,179 @@ export async function POST(req: Request) {
       ? authHeader.slice("Bearer ".length)
       : null;
 
-    if (!token) return NextResponse.json({ error: "Missing token" }, { status: 401 });
+    if (!token) {
+      return NextResponse.json({ error: "Missing token" }, { status: 401 });
+    }
 
     const decoded = await adminAuth.verifyIdToken(token);
     const uid = decoded.uid;
 
     const body = await req.json().catch(() => null);
-    const direction = body?.direction as Direction;
-    const method = body?.method as PaymentMethod;
-    const category = normalizeCategory(String(body?.category || ""));
-    const amountCents = Number(body?.amountCents);
-    const occurredAtRaw = body?.occurredAt;
-    const note = String(body?.note || "").trim();
+    if (!body?.items || !body?.paymentMethod) {
+      return NextResponse.json({ error: "Bad request" }, { status: 400 });
+    }
 
-    if (!["in", "out"].includes(direction))
-      return NextResponse.json({ error: "direction inválida" }, { status: 400 });
-
-    if (!["cash", "transfer", "debit", "credit", "mp"].includes(method))
-      return NextResponse.json({ error: "method inválido" }, { status: 400 });
-
-    if (!category) return NextResponse.json({ error: "category requerido" }, { status: 400 });
-
-    if (!Number.isInteger(amountCents) || amountCents <= 0)
-      return NextResponse.json({ error: "amountCents inválido" }, { status: 400 });
-    if (amountCents > MAX_AMOUNT_CENTS)
-      return NextResponse.json({ error: "amountCents excede el máximo" }, { status: 400 });
+    const paymentMethod = body.paymentMethod as PaymentMethod;
+    const items = body.items as Array<
+      | { productId: string; mode: "kg"; qtyKg: number }
+      | { productId: string; mode: "amount"; amountCents: number }
+    >;
+    if (!Array.isArray(items) || items.length === 0) {
+      return NextResponse.json({ error: "items inválidos" }, { status: 400 });
+    }
 
     const userSnap = await adminDb.collection("users").doc(uid).get();
-    if (!userSnap.exists) return NextResponse.json({ error: "UserDoc missing" }, { status: 401 });
+    if (!userSnap.exists) {
+      return NextResponse.json({ error: "UserDoc missing" }, { status: 401 });
+    }
 
-    const { shopId } = userSnap.data() as { shopId: string };
+    const user = userSnap.data() as { shopId: string; role: string };
+    const shopId = user.shopId;
 
     const now = new Date();
-    const occurredAt =
-      typeof occurredAtRaw === "number" && Number.isFinite(occurredAtRaw)
-        ? new Date(occurredAtRaw)
-        : now;
-    const { dayKey, monthKey } = formatKeysAR(occurredAt);
+    const { dayKey, monthKey } = formatKeysAR(now);
 
     const shopRef = adminDb.collection("shops").doc(shopId);
+    const salesCol = shopRef.collection("sales");
     const cashCol = shopRef.collection("cash_movements");
     const dailyRef = shopRef.collection("daily_summaries").doc(dayKey);
     const monthlyRef = shopRef.collection("monthly_summaries").doc(monthKey);
 
-    const sign = direction === "in" ? 1 : -1;
-
     const result = await adminDb.runTransaction(async (tx) => {
-      const cashRef = cashCol.doc();
+      const itemsSummary: Array<{
+        productId: string;
+        productName: string;
+        qtyKg: number;
+        pricePerKgCents: number;
+        totalCents: number;
+        newStock: number;
+      }> = [];
+      let totalCents = 0;
+      let totalQtyKg = 0;
 
+      for (const item of items) {
+        const productRef = shopRef.collection("products").doc(item.productId);
+        const prodSnap = await tx.get(productRef);
+        if (!prodSnap.exists) throw new Error("Producto no existe");
+
+        const p = prodSnap.data() as {
+          name: string;
+          unit: "kg" | "unit";
+          salePriceCents: number;
+          stockQty: number;
+        };
+
+        if (p.unit !== "kg") throw new Error("En MVP ventas solo para productos por KG");
+
+        const pricePerKgCents = p.salePriceCents;
+
+        let qtyKg: number;
+        let itemTotalCents: number;
+
+        if (item.mode === "kg") {
+          qtyKg = Number(item.qtyKg);
+          if (!Number.isFinite(qtyKg) || qtyKg <= 0) throw new Error("qtyKg inválido");
+          itemTotalCents = Math.round(qtyKg * pricePerKgCents);
+        } else {
+          const amountCents = Number(item.amountCents);
+          if (!Number.isInteger(amountCents) || amountCents <= 0)
+            throw new Error("amountCents inválido");
+
+          itemTotalCents = amountCents;
+          qtyKg = Number((amountCents / pricePerKgCents).toFixed(3));
+          if (!Number.isFinite(qtyKg) || qtyKg <= 0) throw new Error("Cálculo qtyKg inválido");
+        }
+
+        const newStock = Number((p.stockQty - qtyKg).toFixed(3));
+        if (newStock < -0.0001) throw new Error("Stock insuficiente");
+
+        tx.update(productRef, { stockQty: newStock });
+
+        itemsSummary.push({
+          productId: item.productId,
+          productName: p.name,
+          qtyKg,
+          pricePerKgCents,
+          totalCents: itemTotalCents,
+          newStock,
+        });
+        totalCents += itemTotalCents;
+        totalQtyKg += qtyKg;
+      }
+
+      const saleRef = salesCol.doc();
+      tx.set(saleRef, {
+        createdAt: now.getTime(),
+        createdBy: uid,
+        shopId,
+        paymentMethod,
+        items: itemsSummary.map(({ newStock: _newStock, ...rest }) => rest),
+        totalQtyKg,
+        totalCents,
+      });
+
+      const cashRef = cashCol.doc();
       tx.set(cashRef, {
         createdAt: now.getTime(),
-        occurredAt: occurredAt.getTime(),
-        type: "manual",
-        direction,
-        method,
-        category,
-        note: note || null,
-        amountCents,
+        type: "sale",
+        direction: "in",
+        method: paymentMethod,
+        amountCents: totalCents,
+        saleId: saleRef.id,
         createdBy: uid,
       });
 
-      // neto siempre firmado
-      const incNet = FieldValue.increment(sign * amountCents);
+      // ✅ summaries: ventas
+      tx.set(
+        dailyRef,
+        {
+          day: dayKey,
+          updatedAt: now.getTime(),
+          salesCount: FieldValue.increment(1),
+          salesTotalCents: FieldValue.increment(totalCents),
+          // compat (por si ya venías usando "byMethod")
+          byMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
+          // nuevo (más claro)
+          salesByMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
+        },
+        { merge: true }
+      );
 
-      const dailyPatch: any = {
-        day: dayKey,
-        updatedAt: now.getTime(),
-        cashNetCents: incNet,
-        // compat vieja (firmado)
-        cashByMethod: { [method]: FieldValue.increment(sign * amountCents) },
-        cashByCategory: { [category]: FieldValue.increment(sign * amountCents) },
-      };
+      tx.set(
+        monthlyRef,
+        {
+          month: monthKey,
+          updatedAt: now.getTime(),
+          salesCount: FieldValue.increment(1),
+          salesTotalCents: FieldValue.increment(totalCents),
+          byMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
+          salesByMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
+        },
+        { merge: true }
+      );
 
-      const monthlyPatch: any = {
-        month: monthKey,
-        updatedAt: now.getTime(),
-        cashNetCents: incNet,
-        cashByMethod: { [method]: FieldValue.increment(sign * amountCents) },
-        cashByCategory: { [category]: FieldValue.increment(sign * amountCents) },
-      };
+      // ✅ summaries: caja (ventas también son ingreso)
+      tx.set(
+        dailyRef,
+        {
+          cashInCents: FieldValue.increment(totalCents),
+          cashNetCents: FieldValue.increment(totalCents),
+          cashInByMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
+        },
+        { merge: true }
+      );
 
-      // ✅ nuevo: separar in/out
-      if (direction === "in") {
-        dailyPatch.cashInCents = FieldValue.increment(amountCents);
-        dailyPatch.cashInByMethod = { [method]: FieldValue.increment(amountCents) };
+      tx.set(
+        monthlyRef,
+        {
+          cashInCents: FieldValue.increment(totalCents),
+          cashNetCents: FieldValue.increment(totalCents),
+          cashInByMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
+        },
+        { merge: true }
+      );
 
-        monthlyPatch.cashInCents = FieldValue.increment(amountCents);
-        monthlyPatch.cashInByMethod = { [method]: FieldValue.increment(amountCents) };
-      } else {
-        dailyPatch.cashOutCents = FieldValue.increment(amountCents);
-        dailyPatch.cashOutByMethod = { [method]: FieldValue.increment(amountCents) };
-
-        monthlyPatch.cashOutCents = FieldValue.increment(amountCents);
-        monthlyPatch.cashOutByMethod = { [method]: FieldValue.increment(amountCents) };
-      }
-
-      tx.set(dailyRef, dailyPatch, { merge: true });
-      tx.set(monthlyRef, monthlyPatch, { merge: true });
-
-      return { id: cashRef.id };
+      return { saleId: saleRef.id, totalCents, totalQtyKg, items: itemsSummary };
     });
 
     return NextResponse.json({ ok: true, ...result });

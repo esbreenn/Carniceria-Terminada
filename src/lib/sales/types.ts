@@ -5,8 +5,16 @@ export type SaleItemInput =
   | { productId: string; mode: "amount"; amountCents: number };
 
 export type CreateSaleInput = {
-  item: SaleItemInput; // MVP: 1 producto por venta
+  items: SaleItemInput[];
   paymentMethod: PaymentMethod;
+};
+
+export type SaleItemDoc = {
+  productId: string;
+  productName: string;
+  qtyKg: number;
+  pricePerKgCents: number;
+  totalCents: number;
 };
 
 export type SaleDoc = {
@@ -16,11 +24,12 @@ export type SaleDoc = {
   shopId: string;
   paymentMethod: PaymentMethod;
 
-  productId: string;
-  productName: string;
+  productId?: string;
+  productName?: string;
 
-  qtyKg: number; // cantidad final en kg (puede ser decimal)
-  pricePerKgCents: number;
+  qtyKg?: number; // cantidad final en kg (puede ser decimal)
+  pricePerKgCents?: number;
+  items?: SaleItemDoc[];
 
   totalCents: number;
 };

@@ -34,14 +34,18 @@ export async function POST(req: Request) {
     const uid = decoded.uid;
 
     const body = await req.json().catch(() => null);
-    if (!body?.item || !body?.paymentMethod) {
+    if (!body?.items || !body?.paymentMethod) {
       return NextResponse.json({ error: "Bad request" }, { status: 400 });
     }
 
     const paymentMethod = body.paymentMethod as PaymentMethod;
-    const item = body.item as
+    const items = body.items as Array<
       | { productId: string; mode: "kg"; qtyKg: number }
-      | { productId: string; mode: "amount"; amountCents: number };
+      | { productId: string; mode: "amount"; amountCents: number }
+    >;
+    if (!Array.isArray(items) || items.length === 0) {
+      return NextResponse.json({ error: "items inválidos" }, { status: 400 });
+    }
 
     const userSnap = await adminDb.collection("users").doc(uid).get();
     if (!userSnap.exists) {
@@ -55,48 +59,72 @@ export async function POST(req: Request) {
     const { dayKey, monthKey } = formatKeysAR(now);
 
     const shopRef = adminDb.collection("shops").doc(shopId);
-    const productRef = shopRef.collection("products").doc(item.productId);
     const salesCol = shopRef.collection("sales");
     const cashCol = shopRef.collection("cash_movements");
     const dailyRef = shopRef.collection("daily_summaries").doc(dayKey);
     const monthlyRef = shopRef.collection("monthly_summaries").doc(monthKey);
 
     const result = await adminDb.runTransaction(async (tx) => {
-      const prodSnap = await tx.get(productRef);
-      if (!prodSnap.exists) throw new Error("Producto no existe");
+      const itemsSummary: Array<{
+        productId: string;
+        productName: string;
+        qtyKg: number;
+        pricePerKgCents: number;
+        totalCents: number;
+        newStock: number;
+      }> = [];
+      let totalCents = 0;
+      let totalQtyKg = 0;
 
-      const p = prodSnap.data() as {
-        name: string;
-        unit: "kg" | "unit";
-        salePriceCents: number;
-        stockQty: number;
-      };
+      for (const item of items) {
+        const productRef = shopRef.collection("products").doc(item.productId);
+        const prodSnap = await tx.get(productRef);
+        if (!prodSnap.exists) throw new Error("Producto no existe");
 
-      if (p.unit !== "kg") throw new Error("En MVP ventas solo para productos por KG");
+        const p = prodSnap.data() as {
+          name: string;
+          unit: "kg" | "unit";
+          salePriceCents: number;
+          stockQty: number;
+        };
 
-      const pricePerKgCents = p.salePriceCents;
+        if (p.unit !== "kg") throw new Error("En MVP ventas solo para productos por KG");
 
-      let qtyKg: number;
-      let totalCents: number;
+        const pricePerKgCents = p.salePriceCents;
 
-      if (item.mode === "kg") {
-        qtyKg = Number(item.qtyKg);
-        if (!Number.isFinite(qtyKg) || qtyKg <= 0) throw new Error("qtyKg inválido");
-        totalCents = Math.round(qtyKg * pricePerKgCents);
-      } else {
-        const amountCents = Number(item.amountCents);
-        if (!Number.isInteger(amountCents) || amountCents <= 0)
-          throw new Error("amountCents inválido");
+        let qtyKg: number;
+        let itemTotalCents: number;
 
-        totalCents = amountCents;
-        qtyKg = Number((amountCents / pricePerKgCents).toFixed(3));
-        if (!Number.isFinite(qtyKg) || qtyKg <= 0) throw new Error("Cálculo qtyKg inválido");
+        if (item.mode === "kg") {
+          qtyKg = Number(item.qtyKg);
+          if (!Number.isFinite(qtyKg) || qtyKg <= 0) throw new Error("qtyKg inválido");
+          itemTotalCents = Math.round(qtyKg * pricePerKgCents);
+        } else {
+          const amountCents = Number(item.amountCents);
+          if (!Number.isInteger(amountCents) || amountCents <= 0)
+            throw new Error("amountCents inválido");
+
+          itemTotalCents = amountCents;
+          qtyKg = Number((amountCents / pricePerKgCents).toFixed(3));
+          if (!Number.isFinite(qtyKg) || qtyKg <= 0) throw new Error("Cálculo qtyKg inválido");
+        }
+
+        const newStock = Number((p.stockQty - qtyKg).toFixed(3));
+        if (newStock < -0.0001) throw new Error("Stock insuficiente");
+
+        tx.update(productRef, { stockQty: newStock });
+
+        itemsSummary.push({
+          productId: item.productId,
+          productName: p.name,
+          qtyKg,
+          pricePerKgCents,
+          totalCents: itemTotalCents,
+          newStock,
+        });
+        totalCents += itemTotalCents;
+        totalQtyKg += qtyKg;
       }
-
-      const newStock = Number((p.stockQty - qtyKg).toFixed(3));
-      if (newStock < -0.0001) throw new Error("Stock insuficiente");
-
-      tx.update(productRef, { stockQty: newStock });
 
       const saleRef = salesCol.doc();
       tx.set(saleRef, {
@@ -104,10 +132,8 @@ export async function POST(req: Request) {
         createdBy: uid,
         shopId,
         paymentMethod,
-        productId: item.productId,
-        productName: p.name,
-        qtyKg,
-        pricePerKgCents,
+        items: itemsSummary.map(({ newStock: _newStock, ...rest }) => rest),
+        totalQtyKg,
         totalCents,
       });
 
@@ -130,9 +156,7 @@ export async function POST(req: Request) {
           updatedAt: now.getTime(),
           salesCount: FieldValue.increment(1),
           salesTotalCents: FieldValue.increment(totalCents),
-          // compat (por si ya venías usando "byMethod")
           byMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
-          // nuevo (más claro)
           salesByMethod: { [paymentMethod]: FieldValue.increment(totalCents) },
         },
         { merge: true }
@@ -172,7 +196,7 @@ export async function POST(req: Request) {
         { merge: true }
       );
 
-      return { saleId: saleRef.id, totalCents, qtyKg, newStock };
+      return { saleId: saleRef.id, totalCents, totalQtyKg, items: itemsSummary };
     });
 
     return NextResponse.json({ ok: true, ...result });
